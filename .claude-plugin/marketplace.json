@@ -1,0 +1,21 @@
+{
+  "name": "starttech",
+  "owner": {
+    "name": "Starttech",
+    "email": "papagiannis@starttech.eu"
+  },
+  "description": "Starttech Claude Code plugin marketplace — product, analytics, and engineering skills.",
+  "version": "0.1.1",
+  "plugins": [
+    {
+      "name": "product-management",
+      "source": "./product-management",
+      "description": "Product management & analytics skills for Starttech teams.",
+      "version": "0.1.1",
+      "author": {
+        "name": "Starttech",
+        "email": "papagiannis@starttech.eu"
+      }
+    }
+  ]
+}

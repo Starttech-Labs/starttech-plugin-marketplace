@@ -1,0 +1,15 @@
+{
+  "name": "product-management",
+  "description": "Product management & analytics skills for Starttech teams.",
+  "version": "0.1.1",
+  "author": {
+    "name": "Starttech",
+    "email": "papagiannis@starttech.eu"
+  },
+  "keywords": [
+    "product-management",
+    "analytics",
+    "metrics",
+    "planning"
+  ]
+}
