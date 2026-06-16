@@ -10,7 +10,8 @@ no external dependencies so it can't be bypassed by a missing toolchain:
   - each plugin entry has a unique name and a source
   - local (monorepo) sources resolve to a directory inside the repo that
     contains .claude-plugin/plugin.json with a name
-  - object sources (curated-index style) carry a url or repo
+  - object sources declare a type (github/url/git-subdir/npm) and carry the
+    locator field that type requires (repo / url / url+path / package)
   - every bundled skill has a SKILL.md with name + description frontmatter
 
 Exits non-zero on any error so the PR's required check fails.
@@ -157,8 +158,26 @@ def main():
                     else:
                         validate_plugin(pdir, name, where)
             elif isinstance(source, dict):
-                if not (source.get("url") or source.get("repo")):
-                    err(f"{where} ('{name}'): object source needs a 'url' or 'repo'")
+                # Object sources are typed by a 'source' discriminator. Each
+                # known type requires its own locator field (per the Claude Code
+                # marketplace docs): github->repo, url->url, git-subdir->url+path,
+                # npm->package.
+                required = {"github": "repo", "url": "url",
+                            "git-subdir": "url", "npm": "package"}
+                stype = source.get("source")
+                if stype is None:
+                    # Untyped object: accept any recognized locator key.
+                    if not (source.get("url") or source.get("repo") or source.get("package")):
+                        err(f"{where} ('{name}'): object source needs a 'source' type "
+                            f"(github/url/git-subdir/npm) or a url/repo/package")
+                elif stype not in required:
+                    err(f"{where} ('{name}'): unknown object source type '{stype}' "
+                        f"(expected one of github, url, git-subdir, npm)")
+                else:
+                    if not source.get(required[stype]):
+                        err(f"{where} ('{name}'): '{stype}' source requires '{required[stype]}'")
+                    if stype == "git-subdir" and not source.get("path"):
+                        err(f"{where} ('{name}'): 'git-subdir' source requires 'path'")
             else:
                 err(f"{where} ('{name}'): 'source' must be a string path or an object")
 

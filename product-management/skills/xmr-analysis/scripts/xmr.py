@@ -160,26 +160,30 @@ def _detect_quartile(values, limits, dates, offset):
     lower_mid = (x_bar + lnpl) / 2  # boundary of lower outer quartile
 
     for i in range(len(values) - 3):
-        window = values[i:i + 4]
-        upper_count = sum(1 for v in window if v > upper_mid)
-        lower_count = sum(1 for v in window if v < lower_mid)
-        # Flag the 4th (most recent) point of the window, but only when that
-        # point is itself in the triggering outer zone -- otherwise its value
-        # and direction would contradict the signal. As the window slides, the
-        # most recent in-zone point is still flagged.
-        idx = i + 3
-        if upper_count >= 3 and values[idx] > upper_mid:
+        upper = [j for j in range(i, i + 4) if values[j] > upper_mid]
+        lower = [j for j in range(i, i + 4) if values[j] < lower_mid]
+        # When a 4-window has 3+ points in an outer zone, flag the most recent
+        # point that is itself in that zone -- NOT necessarily the 4th point of
+        # the window. Gating on the 4th point would silently miss a 3-of-4 run
+        # whose final point reverts toward the center (e.g. a run anchored at
+        # the very start of a segment, which no later window re-captures).
+        # Anchoring on the last in-zone point keeps value/direction consistent
+        # with the signal; _dedupe drops the repeats produced as the window
+        # slides over the same in-zone point.
+        if len(upper) >= 3:
+            idx = upper[-1]
             signals.append(Signal(
                 index=idx + offset, date=dates[idx] if dates else None,
                 value=values[idx], rule="quartile", direction="high",
-                detail=f"3 of last 4 points above {upper_mid:.2f} "
+                detail=f"3 of 4 consecutive points above {upper_mid:.2f} "
                        f"(midpoint between center {x_bar:.2f} and UNPL {unpl:.2f})",
             ))
-        elif lower_count >= 3 and values[idx] < lower_mid:
+        elif len(lower) >= 3:
+            idx = lower[-1]
             signals.append(Signal(
                 index=idx + offset, date=dates[idx] if dates else None,
                 value=values[idx], rule="quartile", direction="low",
-                detail=f"3 of last 4 points below {lower_mid:.2f} "
+                detail=f"3 of 4 consecutive points below {lower_mid:.2f} "
                        f"(midpoint between center {x_bar:.2f} and LNPL {lnpl:.2f})",
             ))
     return _dedupe(signals)
@@ -481,18 +485,38 @@ if __name__ == "__main__":
     dates, values = None, []
 
     if args.values:
-        values = [float(v) for v in _parse_inline(args.values)]
+        try:
+            values = [float(v) for v in _parse_inline(args.values)]
+        except ValueError as e:
+            sys.exit(f"--values must be comma/whitespace separated numbers: {e}")
         dates = _parse_inline(args.dates)
         if dates and len(dates) != len(values):
             sys.exit(f"--dates has {len(dates)} labels but --values has "
                      f"{len(values)} numbers; they must match.")
     elif args.csv_path:
         dates = []
-        with open(args.csv_path) as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                dates.append(row[args.date_col])
-                values.append(float(row[args.value_col]))
+        # utf-8-sig so a BOM from Excel/Windows exports is stripped (otherwise
+        # the first header becomes '﻿<col>' and the column lookup fails);
+        # newline="" is the csv module's documented recommendation.
+        try:
+            with open(args.csv_path, newline="", encoding="utf-8-sig") as f:
+                reader = csv.DictReader(f)
+                if reader.fieldnames is None:
+                    sys.exit(f"CSV is empty (no header row): {args.csv_path}")
+                for col in (args.date_col, args.value_col):
+                    if col not in reader.fieldnames:
+                        sys.exit(f"CSV column '{col}' not found; columns are: "
+                                 f"{', '.join(reader.fieldnames)}")
+                for n, row in enumerate(reader, start=2):  # row 1 is the header
+                    raw = row[args.value_col]
+                    try:
+                        values.append(float(raw))
+                    except (TypeError, ValueError):
+                        sys.exit(f"CSV row {n}: value {raw!r} in column "
+                                 f"'{args.value_col}' is not a number.")
+                    dates.append(row[args.date_col])
+        except FileNotFoundError:
+            sys.exit(f"CSV not found: {args.csv_path}")
     else:
         p.error("Provide either a csv_path or --values.")
 
