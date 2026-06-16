@@ -37,6 +37,9 @@ Programmatic use (import — only if the script dir is importable):
 
 from __future__ import annotations
 
+import math
+import re
+
 from dataclasses import dataclass, field, asdict
 from typing import Sequence, Optional
 
@@ -290,6 +293,17 @@ def analyze(values: Sequence[float],
             "message": f"dates has {len(dates)} entries but values has {n}; "
                        f"they must be the same length.",
         }
+    nonfinite = [i for i, v in enumerate(values) if not math.isfinite(v)]
+    if nonfinite:
+        return {
+            "ok": False,
+            "n_points": n,
+            "message": (f"values contains a non-finite entry (NaN or infinity) at "
+                        f"index {nonfinite[0]}; every value must be a finite number. "
+                        f"NaN/inf would otherwise pass through as a false "
+                        f"'predictable' result, since every comparison against them "
+                        f"is false."),
+        }
     if n < MIN_POINTS:
         return {
             "ok": False,
@@ -380,11 +394,20 @@ def render_chart(values: Sequence[float],
     ax_x.plot(x_axis, values, "-o", color="#2c3e50", markersize=4,
               linewidth=1, zorder=3)
 
+    # mR panel: plot each segment's moving ranges as a SEPARATE polyline and omit
+    # the moving range that straddles a divider. mrs_all[seg_start] is the
+    # cross-segment jump, which belongs to no segment's mR-bar/URL; drawing it
+    # would show a connected spike towering, unflagged, above both segments'
+    # limits. Skipping it also keeps the panel's y-scale tied to real variation.
     mrs_all = moving_ranges(values)
-    mr_x = [x_axis[i] for i, r in enumerate(mrs_all) if r is not None]
-    mr_y = [r for r in mrs_all if r is not None]
-    ax_mr.plot(mr_x, mr_y, "-o", color="#2c3e50", markersize=4,
-               linewidth=1, zorder=3)
+    for seg in result["segments"]:
+        s, e = seg["start_index"], seg["end_index"]
+        seg_mr_idx = [k for k in range(s + 1, e + 1) if mrs_all[k] is not None]
+        if not seg_mr_idx:
+            continue
+        ax_mr.plot([x_axis[k] for k in seg_mr_idx],
+                   [mrs_all[k] for k in seg_mr_idx],
+                   "-o", color="#2c3e50", markersize=4, linewidth=1, zorder=3)
 
     # Per-segment limits + signals
     signal_indices = set()
@@ -451,12 +474,19 @@ def render_chart(values: Sequence[float],
 # CLI for ad-hoc use
 # ---------------------------------------------------------------------------
 
-def _parse_inline(text):
-    """Parse a comma/whitespace separated list of numbers (values) or strings (dates)."""
+def _parse_inline(text, whitespace=False):
+    """Split an inline list into tokens.
+
+    Commas and newlines always separate. When `whitespace` is true (used for the
+    numeric --values, which never contain internal spaces) any run of spaces/tabs
+    also separates, so "12 14 11" parses as three numbers. Date labels keep
+    comma/newline-only splitting so a label with internal spaces (e.g. "Jan 2026")
+    survives as one token.
+    """
     if text is None:
         return None
-    parts = [p.strip() for p in text.replace("\n", ",").split(",")]
-    return [p for p in parts if p != ""]
+    sep = r"[,\s]+" if whitespace else r"[,\n]+"
+    return [p.strip() for p in re.split(sep, text.strip()) if p.strip()]
 
 
 if __name__ == "__main__":
@@ -486,9 +516,13 @@ if __name__ == "__main__":
 
     if args.values:
         try:
-            values = [float(v) for v in _parse_inline(args.values)]
+            values = [float(v) for v in _parse_inline(args.values, whitespace=True)]
         except ValueError as e:
             sys.exit(f"--values must be comma/whitespace separated numbers: {e}")
+        for i, v in enumerate(values):
+            if not math.isfinite(v):
+                sys.exit(f"--values entry #{i + 1} is {v!r}; values must be finite "
+                         f"(no NaN or infinity).")
         dates = _parse_inline(args.dates)
         if dates and len(dates) != len(values):
             sys.exit(f"--dates has {len(dates)} labels but --values has "
@@ -510,10 +544,15 @@ if __name__ == "__main__":
                 for n, row in enumerate(reader, start=2):  # row 1 is the header
                     raw = row[args.value_col]
                     try:
-                        values.append(float(raw))
+                        val = float(raw)
                     except (TypeError, ValueError):
                         sys.exit(f"CSV row {n}: value {raw!r} in column "
                                  f"'{args.value_col}' is not a number.")
+                    if not math.isfinite(val):
+                        sys.exit(f"CSV row {n}: value {raw!r} in column "
+                                 f"'{args.value_col}' is not finite (no NaN or "
+                                 f"infinity).")
+                    values.append(val)
                     dates.append(row[args.date_col])
         except FileNotFoundError:
             sys.exit(f"CSV not found: {args.csv_path}")
@@ -521,7 +560,7 @@ if __name__ == "__main__":
         p.error("Provide either a csv_path or --values.")
 
     result = analyze(values, dates, dividers=args.divider or None)
-    json.dump(result, sys.stdout, indent=2, default=str)
+    json.dump(result, sys.stdout, indent=2, default=str, allow_nan=False)
     print()
 
     if args.chart:
