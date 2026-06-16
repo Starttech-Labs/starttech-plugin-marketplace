@@ -102,13 +102,21 @@ def moving_ranges(values: Sequence[float]) -> list:
     return out
 
 
-def compute_limits(values: Sequence[float]) -> dict:
-    """Compute X_bar, mR_bar, UNPL, LNPL, URL for a single segment."""
+def compute_limits(values: Sequence[float], mrs: Optional[Sequence] = None) -> dict:
+    """Compute X_bar, mR_bar, UNPL, LNPL, URL for a single segment.
+
+    `mrs` may carry the segment's moving ranges already computed elsewhere --
+    e.g. with a leading divider-spanning range so the post-intervention jump
+    counts toward this segment's limits. When omitted, the moving ranges are
+    derived from `values` alone (None entries are ignored either way). X_bar is
+    always the mean of `values` only; the supplied mrs affect only mR_bar."""
     if len(values) < 2:
         raise ValueError("Need at least 2 data points to compute limits.")
     x_bar = sum(values) / len(values)
-    mrs = [r for r in moving_ranges(values) if r is not None]
-    mr_bar = sum(mrs) / len(mrs)
+    if mrs is None:
+        mrs = moving_ranges(values)
+    used = [r for r in mrs if r is not None]
+    mr_bar = sum(used) / len(used)
     unpl = x_bar + E2 * mr_bar
     lnpl = x_bar - E2 * mr_bar
     url = D4 * mr_bar
@@ -232,10 +240,13 @@ def _dedupe(signals: list) -> list:
     return out
 
 
-def detect_signals(values, limits, dates=None, offset=0) -> list:
+def detect_signals(values, limits, dates=None, offset=0, mrs=None) -> list:
     """Run all three rules. `offset` lets you produce global indices when
-    analysing a segment that doesn't start at 0."""
-    mrs = moving_ranges(values)
+    analysing a segment that doesn't start at 0. `mrs` may carry the segment's
+    moving ranges (e.g. with a leading divider-spanning range) so the mR rule
+    flags the post-divider jump; when omitted it's computed from `values`."""
+    if mrs is None:
+        mrs = moving_ranges(values)
     sigs = []
     sigs += _detect_process_limit(values, mrs, limits, dates, offset)
     sigs += _detect_quartile(values, limits, dates, offset)
@@ -261,8 +272,18 @@ def _maturity(n: int) -> str:
 def _analyze_segment(values, dates, start, end) -> SegmentAnalysis:
     seg_values = values[start:end + 1]
     seg_dates = dates[start:end + 1] if dates else None
-    limits = compute_limits(seg_values)
-    sigs = detect_signals(seg_values, limits, seg_dates, offset=start)
+    # Moving ranges for this segment. For a segment that follows a divider, the
+    # first moving range spans the divider (|values[start] - values[start-1]|),
+    # i.e. the post-intervention jump. It IS counted toward this segment's
+    # mR-bar, its limits (mR-bar widens UNPL/LNPL/URL), and its mR signal
+    # detection -- matching xmrit, where the jump belongs to the new segment and
+    # is flagged if it breaches that segment's URL. X-bar still uses seg_values
+    # only, so the center line is unaffected.
+    seg_mrs = moving_ranges(seg_values)
+    if start > 0:
+        seg_mrs[0] = abs(values[start] - values[start - 1])
+    limits = compute_limits(seg_values, seg_mrs)
+    sigs = detect_signals(seg_values, limits, seg_dates, offset=start, mrs=seg_mrs)
     return SegmentAnalysis(
         start_index=start,
         end_index=end,
@@ -272,7 +293,7 @@ def _analyze_segment(values, dates, start, end) -> SegmentAnalysis:
         unpl=limits["unpl"],
         lnpl=limits["lnpl"],
         url=limits["url"],
-        moving_ranges=moving_ranges(seg_values),
+        moving_ranges=seg_mrs,
         signals=sigs,
         predictable=len(sigs) == 0,
         maturity=_maturity(len(seg_values)),
@@ -394,20 +415,15 @@ def render_chart(values: Sequence[float],
     ax_x.plot(x_axis, values, "-o", color="#2c3e50", markersize=4,
               linewidth=1, zorder=3)
 
-    # mR panel: plot each segment's moving ranges as a SEPARATE polyline and omit
-    # the moving range that straddles a divider. mrs_all[seg_start] is the
-    # cross-segment jump, which belongs to no segment's mR-bar/URL; drawing it
-    # would show a connected spike towering, unflagged, above both segments'
-    # limits. Skipping it also keeps the panel's y-scale tied to real variation.
+    # mR panel: one continuous line over the whole series. The moving range that
+    # spans a divider is the post-intervention jump; it belongs to the new
+    # segment's mR-bar/limits (see _analyze_segment) and is highlighted as a
+    # signal below if it breaches that segment's URL -- matching xmrit.
     mrs_all = moving_ranges(values)
-    for seg in result["segments"]:
-        s, e = seg["start_index"], seg["end_index"]
-        seg_mr_idx = [k for k in range(s + 1, e + 1) if mrs_all[k] is not None]
-        if not seg_mr_idx:
-            continue
-        ax_mr.plot([x_axis[k] for k in seg_mr_idx],
-                   [mrs_all[k] for k in seg_mr_idx],
-                   "-o", color="#2c3e50", markersize=4, linewidth=1, zorder=3)
+    mr_x = [x_axis[i] for i, r in enumerate(mrs_all) if r is not None]
+    mr_y = [r for r in mrs_all if r is not None]
+    ax_mr.plot(mr_x, mr_y, "-o", color="#2c3e50", markersize=4,
+               linewidth=1, zorder=3)
 
     # Per-segment limits + signals
     signal_indices = set()

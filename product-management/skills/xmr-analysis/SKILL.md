@@ -75,13 +75,15 @@ Once you've classified the metric, the action is different:
 
 ## Before/after analysis with dividers
 
-When the user is asking "did intervention X work?", place a divider at the intervention date. The script recomputes limits for each segment independently. Three things to look for:
+When the user is asking "did intervention X work?", place a divider at the intervention date. Each segment gets its own limits, with one wrinkle: the moving range that spans the divider (last pre-intervention point → first post-intervention point) belongs to the **new** segment, so it widens that segment's limits and shows up as an mR signal. Three things to look for:
 
 1. **Center line shifted** in the intended direction → the intervention moved the average.
 2. **Limits shifted** in the intended direction → the whole band of variation moved, not just an outlier.
-3. **New segment is stable** (predictable within its new limits, no rule violations) → the change held, didn't just produce a one-off spike.
+3. **New segment is stable** — its X-chart points sit inside the new limits and its *within-segment* moving ranges are calm → the change held, didn't just produce a one-off spike.
 
 All three together is a clean win. Shifted center but unstable new segment usually means the intervention introduced new special causes alongside the lift.
+
+**Expect — and discount — one mR signal at the divider.** The moving range that spans the intervention belongs to the new segment, so the script flags it and the chart marks it red. That red point *is* the jump you introduced; it confirms the shift happened, not that the new process is unstable. Judge stability (point 3) from the X-chart and the within-segment moving ranges, never from that one boundary point.
 
 6–8 points post-divider is often enough to draw a conclusion. More is better but waiting indefinitely is usually wrong — at some point you have to call it.
 
